@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::str;
 
 use async_channel::{self as channel, bounded};
+#[cfg(any(feature = "tokio-native-tls", feature = "async-std-native-tls"))]
 use async_native_tls::{TlsConnector, TlsStream};
 #[cfg(feature = "runtime-async-std")]
 use async_std::{
@@ -14,12 +15,16 @@ use async_std::{
 use extensions::id::{format_identification, parse_id};
 use extensions::quota::parse_get_quota_root;
 use futures::{io, Stream, StreamExt};
+#[cfg(feature = "async-std-rustls-tls")]
+use futures_rustls::{client::TlsStream, TlsConnector};
 use imap_proto::{RequestId, Response};
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     io::{AsyncRead as Read, AsyncWrite as Write, AsyncWriteExt},
     net::{TcpStream, ToSocketAddrs},
 };
+#[cfg(feature = "tokio-rustls-tls")]
+use tokio_rustls::{client::TlsStream, TlsConnector};
 
 use super::authenticator::Authenticator;
 use super::error::{Error, ParseError, Result, ValidateError};
@@ -116,6 +121,7 @@ impl<T: Read + Write + Unpin + fmt::Debug> DerefMut for Session<T> {
     }
 }
 
+#[cfg(any(feature = "tokio-native-tls", feature = "async-std-native-tls"))]
 /// Connect to a server using a TLS-encrypted connection.
 ///
 /// The returned [`Client`] is unauthenticated; to access session-related methods (through
@@ -127,6 +133,7 @@ impl<T: Read + Write + Unpin + fmt::Debug> DerefMut for Session<T> {
 /// # Examples
 ///
 /// ```no_run
+/// #[cfg(any(feature = "tokio-native-tls", feature = "async-std-native-tls"))]
 /// # fn main() -> async_imap::error::Result<()> {
 /// # async_std::task::block_on(async {
 ///
@@ -142,7 +149,76 @@ pub async fn connect<A: ToSocketAddrs, S: AsRef<str>>(
     ssl_connector: TlsConnector,
 ) -> Result<Client<TlsStream<TcpStream>>> {
     let stream = TcpStream::connect(addr).await?;
-    let ssl_stream = ssl_connector.connect(domain.as_ref(), stream).await?;
+
+    let server_name = domain.as_ref();
+
+    let ssl_stream = ssl_connector.connect(server_name, stream).await?;
+
+    let mut client = Client::new(ssl_stream);
+    let _greeting = match client.read_response().await {
+        Some(greeting) => greeting,
+        None => {
+            return Err(Error::Bad(
+                "could not read server Greeting after connect".into(),
+            ));
+        }
+    };
+
+    Ok(client)
+}
+
+#[cfg(any(feature = "tokio-rustls-tls", feature = "async-std-rustls-tls"))]
+/// Connect to a server using a TLS-encrypted connection.
+///
+/// The returned [`Client`] is unauthenticated; to access session-related methods (through
+/// [`Session`]), use [`Client::login`] or [`Client::authenticate`].
+///
+/// The domain must be passed in separately from the `TlsConnector` so that the certificate of the
+/// IMAP server can be validated.
+///
+/// # Examples
+///
+/// ```no_run
+/// # #[cfg(feature = "async-std-rustls-tls")]
+/// # use futures_rustls:: TlsConnector;
+/// # #[cfg(feature = "tokio-rustls-tls")]
+/// # use tokio_rustls::TlsConnector;
+/// #
+/// # #[cfg(any(feature = "async-std-rustls-tls", feature = "tokio-rustls-tls"))]
+/// # fn main() -> async_imap::error::Result<()> {
+/// # async_std::task::block_on(async {
+///
+/// let tls = {
+///         let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
+///         root_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+///             tokio_rustls::rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+///                 ta.subject,
+///                 ta.spki,
+///                 ta.name_constraints,
+///             )
+///         }));
+///         let config = tokio_rustls::rustls::ClientConfig::builder()
+///             .with_safe_defaults()
+///             .with_root_certificates(root_store)
+///             .with_no_client_auth();
+///
+///         tokio_rustls::TlsConnector::from(std::sync::Arc::new(config))
+///     };
+/// let client = async_imap::connect(("imap.example.org", 993), "imap.example.org", tls).await?;
+///
+/// # Ok(())
+/// # }) }
+/// ```
+pub async fn connect<A: ToSocketAddrs, S: AsRef<str>>(
+    addr: A,
+    domain: S,
+    ssl_connector: TlsConnector,
+) -> Result<Client<TlsStream<TcpStream>>> {
+    let stream = TcpStream::connect(addr).await?;
+
+    let server_name = std::convert::TryInto::try_into(domain.as_ref())?;
+
+    let ssl_stream = ssl_connector.connect(server_name, stream).await?;
 
     let mut client = Client::new(ssl_stream);
     let _greeting = match client.read_response().await {
@@ -167,8 +243,15 @@ impl<T: Read + Write + Unpin + fmt::Debug + Send> Client<T> {
         ssl_connector: TlsConnector,
     ) -> Result<Client<TlsStream<T>>> {
         self.run_command_and_check_ok("STARTTLS", None).await?;
+
+        #[cfg(any(feature = "tokio-native-tls", feature = "async-std-native-tls"))]
+        let server_name = domain.as_ref();
+
+        #[cfg(any(feature = "tokio-rustls-tls", feature = "async-std-rustls-tls"))]
+        let server_name = std::convert::TryInto::try_into(domain.as_ref())?;
+
         let ssl_stream = ssl_connector
-            .connect(domain.as_ref(), self.conn.stream.into_inner())
+            .connect(server_name, self.conn.stream.into_inner())
             .await?;
 
         let client = Client::new(ssl_stream);
@@ -224,6 +307,7 @@ impl<T: Read + Write + Unpin + fmt::Debug + Send> Client<T> {
     /// transferred back to the caller.
     ///
     /// ```no_run
+    /// # #[cfg(any(feature = "tokio-native-tls", feature = "async-std-native-tls"))]
     /// # fn main() -> async_imap::error::Result<()> {
     /// # async_std::task::block_on(async {
     ///
@@ -283,6 +367,7 @@ impl<T: Read + Write + Unpin + fmt::Debug + Send> Client<T> {
     ///     }
     /// }
     ///
+    /// # #[cfg(any(feature = "tokio-native-tls", feature = "async-std-native-tls"))]
     /// # fn main() -> async_imap::error::Result<()> {
     /// # async_std::task::block_on(async {
     ///

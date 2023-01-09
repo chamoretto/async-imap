@@ -19,6 +19,7 @@
 //! use futures::prelude::*;
 //! use async_imap::error::Result;
 //!
+//! #[cfg(any(feature = "async-std-native-tls", feature = "tokio-native-tls"))]
 //! async fn fetch_inbox_top() -> Result<Option<String>> {
 //!     let domain = "imap.example.com";
 //!     let tls = async_native_tls::TlsConnector::new();
@@ -62,11 +63,21 @@
 #![warn(missing_docs)]
 #![deny(rust_2018_idioms, unsafe_code)]
 
-#[cfg(not(any(feature = "runtime-tokio", feature = "runtime-async-std")))]
-compile_error!("one of 'runtime-async-std' or 'runtime-tokio' features must be enabled");
+#[cfg(not(any(
+    feature = "async-std-rustls-tls",
+    feature = "async-std-native-tls",
+    feature = "tokio-rustls-tls",
+    feature = "tokio-native-tls"
+)))]
+compile_error!("one of ['async-std-rustls-tls', 'async-std-native-tls', 'tokio-rustls-tls', 'tokio-native-tls'] features must be enabled");
 
-#[cfg(all(feature = "runtime-tokio", feature = "runtime-async-std"))]
-compile_error!("only one of 'runtime-async-std' or 'runtime-tokio' features must be enabled");
+#[cfg(all(
+    feature = "async-std-rustls-tls",
+    feature = "async-std-native-tls",
+    feature = "tokio-rustls-tls",
+    feature = "tokio-native-tls"
+))]
+compile_error!("only one of ['async-std-rustls-tls', 'async-std-native-tls', 'tokio-rustls-tls', 'tokio-native-tls'] features must be enabled");
 #[macro_use]
 extern crate pin_utils;
 

@@ -31,9 +31,29 @@ pub enum Error {
     /// strings](https://tools.ietf.org/html/rfc3501#section-4.3).
     #[error("validate: {0}")]
     Validate(#[from] ValidateError),
+    #[cfg(any(feature = "tokio-native-tls", feature = "async-std-native-tls"))]
     /// `async_native_tls` error
     #[error("async_native_tls: {0}")]
     NativeTlsError(#[from] async_native_tls::Error),
+    #[cfg(feature = "tokio-rustls-tls")]
+    /// `tokio_rustls` error
+    #[error("tokio_rustls: {0}")]
+    RustlsTlsError(#[from] tokio_rustls::rustls::Error),
+    #[cfg(feature = "async-std-rustls-tls")]
+    /// `futures_rustls` error
+    #[error("futures_rustls: {0}")]
+    RustlsTlsError(#[from] futures_rustls::rustls::Error),
+
+    #[cfg(feature = "tokio-rustls-tls")]
+    /// `tokio_rustls` error
+    #[error("tokio_rustls: {0}")]
+    RustlsInvalidDnsNameError(#[from] tokio_rustls::rustls::client::InvalidDnsNameError),
+
+    #[cfg(feature = "async-std-rustls-tls")]
+    /// `futures_rustls` error
+    #[error("futures_rustls: {0}")]
+    RustlsInvalidDnsNameError(#[from] futures_rustls::rustls::client::InvalidDnsNameError),
+
     /// Error appending an e-mail.
     #[error("could not append mail to mailbox")]
     Append,
